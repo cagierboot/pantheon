@@ -2,7 +2,7 @@
 from pathlib import Path
 import numpy as np
 from brian2 import (
-    NeuronGroup, Synapses, SpikeMonitor, Network, start_scope, seed, prefs,
+    NeuronGroup, Synapses, SpikeMonitor, Network, start_scope, seed, prefs, defaultclock,
     ms, mV, second,
 )
 
@@ -16,6 +16,7 @@ class Brain:
         start_scope()
         seed(SEED)  # Reproduce wiring on restart so saved states can be restored.
         prefs.codegen.target = 'numpy'
+        defaultclock.dt = 1*ms  # Faster, lower-resolution stepping for the local prototype.
         eqs = '''
         dv/dt = (v_rest - v)/tau + sigma*xi/sqrt(tau) : volt
         v_rest : volt (constant)
@@ -59,15 +60,45 @@ class Brain:
             on_pre='v_post -= 1.5*mV', name='inhibitory_synapses',
         )
         self.inh.connect(p=0.06)
+        # Two integrated, learnable cue -> response pathways. These connect
+        # EXISTING neurons in the 256-cell brain; they are not a separate model.
+        # Cue A: 12..27, response A: 40..55; cue B: 84..99, response B: 112..127.
+        self.assoc = Synapses(
+            self.neurons, self.neurons,
+            model='''
+            w : volt
+            enabled : 1 (shared)
+            dpre_trace/dt = -pre_trace/(20*ms) : 1 (event-driven)
+            dpost_trace/dt = -post_trace/(20*ms) : 1 (event-driven)
+            ''',
+            on_pre='''
+            v_post += w
+            pre_trace += 1
+            w = clip(w + enabled*post_trace*0.12*mV, 0.1*mV, 2.0*mV)
+            ''',
+            on_post='''
+            post_trace -= 1
+            w = clip(w + enabled*pre_trace*0.12*mV, 0.1*mV, 2.0*mV)
+            ''',
+            name='associative_synapses',
+        )
+        for a, b in ((12,40),(84,112)):
+            self.assoc.connect(i=np.repeat(np.arange(a,a+16),16),
+                               j=np.tile(np.arange(b,b+16),16))
+        self.assoc.w = 0.12*mV
+        self.assoc.enabled = 1
         self.spikes = SpikeMonitor(self.neurons, name='spikes')
-        self.net = Network(self.neurons, self.exc, self.inh, self.spikes)
+        self.net = Network(self.neurons, self.exc, self.inh, self.assoc, self.spikes)
         self.read_index = 0
 
         self.exc_sources = np.asarray(self.exc.i[:], dtype=int)
         self.exc_targets = np.asarray(self.exc.j[:], dtype=int)
+        self.assoc_sources = np.asarray(self.assoc.i[:], dtype=int)
+        self.assoc_targets = np.asarray(self.assoc.j[:], dtype=int)
         self.inh_sources = np.asarray(self.inh.i[:], dtype=int) + N_EXC
         self.inh_targets = np.asarray(self.inh.j[:], dtype=int)
         self.edges = ([(int(i), int(j), True) for i, j in zip(self.exc_sources, self.exc_targets)]
+                      + [(int(i), int(j), True) for i, j in zip(self.assoc_sources, self.assoc_targets)]
                       + [(int(i), int(j), False) for i, j in zip(self.inh_sources, self.inh_targets)])
 
     def step(self, duration_ms=20):
@@ -86,6 +117,7 @@ class Brain:
 
     def set_learning(self, enabled):
         self.exc.learning_enabled = int(enabled)
+        self.assoc.enabled = int(enabled)
 
     @property
     def learning(self):
@@ -99,10 +131,28 @@ class Brain:
     def weights(self):
         return np.asarray(self.exc.w[:] / mV, dtype=float)
 
+    @property
+    def visible_weights(self):
+        return np.concatenate((self.weights, np.asarray(self.assoc.w[:]/mV, dtype=float)))
+
+    def deliver(self, ids, volts=26):
+        """Force an input population over threshold; applied between time steps."""
+        v = np.asarray(self.neurons.v[:]/mV).copy()
+        v[np.asarray(ids, dtype=int)] = float(volts) - 65.0  # -39 mV by default
+        self.neurons.v = v*mV
+
+    def cue(self, pattern):
+        start = 12 if pattern == 'A' else 84
+        self.deliver(range(start, start+16))
+
+    def teacher(self, pattern):
+        start = 40 if pattern == 'A' else 112
+        self.deliver(range(start, start+16))
+
     def inspect(self, neuron_id):
         i = int(neuron_id)
-        incoming = int(np.count_nonzero(self.exc_targets == i) + np.count_nonzero(self.inh_targets == i))
-        outgoing = int(np.count_nonzero(self.exc_sources == i) + np.count_nonzero(self.inh_sources == i))
+        incoming = int(np.count_nonzero(self.exc_targets == i) + np.count_nonzero(self.inh_targets == i) + np.count_nonzero(self.assoc_targets == i))
+        outgoing = int(np.count_nonzero(self.exc_sources == i) + np.count_nonzero(self.inh_sources == i) + np.count_nonzero(self.assoc_sources == i))
         return {'voltage': float(self.neurons.v[i] / mV), 'incoming': incoming,
                 'outgoing': outgoing, 'spikes': int(self.spikes.count[i]),
                 'kind': 'Excitatory' if i < N_EXC else 'Inhibitory'}

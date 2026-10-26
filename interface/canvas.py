@@ -95,7 +95,7 @@ class NeuralCanvas(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
         painter.fillRect(self.rect(), QColor('#080f1f'))
         pts = self.points()
-        weights = self.brain.weights
+        weights = self.brain.visible_weights
         for k, (i, j, excitatory) in enumerate(self.brain.edges):
             pulse = self.sources[i]
             base = QColor('#609fc5') if excitatory else QColor('#d49b65')

@@ -14,7 +14,7 @@ class PantheonWindow(QMainWindow):
     def __init__(self, brain):
         super().__init__()
         self.brain = brain
-        self.setWindowTitle('PANTHEON v0.5 — Neural Observatory')
+        self.setWindowTitle('PANTHEON v0.7 — Neural Observatory')
         self.resize(1240, 830)
         self.setStyleSheet('''
             QMainWindow, QWidget {background:#080f1f;color:#d7e8f5;}
@@ -89,6 +89,10 @@ class PantheonWindow(QMainWindow):
         experiment.clicked.connect(self.run_memory_experiment)
         controls.addWidget(experiment)
         self.experiment_button = experiment
+        retention = QPushButton('Experiment 004: Retention')
+        retention.clicked.connect(self.run_retention_experiment)
+        controls.addWidget(retention)
+        self.retention_button = retention
         layout.addLayout(controls)
 
         self.detail = QLabel('Click a neuron to inspect it. Pulse A/B stimulate distinct groups; Train A repeats A 20 times.')
@@ -252,3 +256,38 @@ This experiment runs in a separate process; your live brain was not altered.
         layout.addWidget(close)
         dialog.exec()
         self.detail.setText('Experiment 002 complete. Live brain remained unchanged by the test.')
+
+    def run_retention_experiment(self):
+        """Run matched memory tests without changing the visualized brain."""
+        self.retention_button.setEnabled(False)
+        self.detail.setText('Running integrated memory assay in a separate process...')
+        self.retention_proc = QProcess(self)
+        self.retention_proc.setWorkingDirectory(str(Path(__file__).resolve().parents[1]))
+        self.retention_proc.setProgram(sys.executable)
+        self.retention_proc.setArguments(['-m', 'brain.retention'])
+        self.retention_proc.finished.connect(self.retention_finished)
+        self.retention_proc.errorOccurred.connect(self.retention_failed)
+        self.retention_proc.start()
+
+    def retention_failed(self, error):
+        self.retention_button.setEnabled(True)
+        self.detail.setText('Retention experiment could not launch: ' + self.retention_proc.errorString())
+
+    def retention_finished(self, exit_code, exit_status):
+        self.retention_button.setEnabled(True)
+        out = bytes(self.retention_proc.readAllStandardOutput()).decode('utf-8', 'replace')
+        err = bytes(self.retention_proc.readAllStandardError()).decode('utf-8', 'replace')
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Pantheon — Experiment 004')
+        dialog.resize(830, 580)
+        layout = QVBoxLayout(dialog)
+        view = QTextEdit()
+        view.setReadOnly(True)
+        view.setPlainText(out if exit_code == 0 else 'Experiment failed:\n' + err[-5000:])
+        view.setStyleSheet('font-family:monospace;font-size:12px;')
+        layout.addWidget(view)
+        close = QPushButton('Close')
+        close.clicked.connect(dialog.accept)
+        layout.addWidget(close)
+        dialog.exec()
+        self.detail.setText('Experiment 004 complete. Live brain not modified.')
