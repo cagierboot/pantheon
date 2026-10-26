@@ -1,8 +1,12 @@
-# Pantheon v0.4 — Neural Development
+# Pantheon v0.6 — Associative Memory Test Rig
 
-A local, experimental 256-neuron spiking neural network with Brian2 and a Qt observatory.
+This release preserves v0.5's live observatory and adds `brain/associative_memory.py`, a separate, *small* functional-memory experiment. We deliberately do not claim the live 256-neuron brain now remembers words or patterns.
 
-## Run on the existing Mac environment
+## Install
+
+Unzip, copy the **contents** of `pantheon_v06` into your existing `~/pantheon` folder, replacing matching files. Keep your `.venv/` and saved `memory/` data. The added experiment only needs NumPy, which is already installed.
+
+## Run the live observatory
 
 ```bash
 cd ~/pantheon
@@ -10,24 +14,22 @@ source .venv/bin/activate
 python main.py
 ```
 
-If you need to install the pinned dependencies: `python -m pip install -r requirements.txt`.
-These versions target your working Python 3.11 / macOS 14.3 installation.
+## Run Experiment 003 — associative memory
 
-## Controls
+```bash
+cd ~/pantheon
+source .venv/bin/activate
+python -m brain.associative_memory
+```
 
-- Mouse wheel: zoom; drag: pan; double-click: reset; click a neuron: inspect.
-- Speed dropdown: simulated milliseconds per UI update (not guaranteed real-time speed).
-- Learning enabled: toggle excitatory STDP.
-- Pulse pattern A/B: directly stimulate different groups of neurons.
-- Train A ×20: repeated A stimulation, while simulation progresses.
-- Save brain / Load brain: Brian2 snapshot file. Treat `.pkl` snapshots as **trusted local files only**; never load unknown snapshots.
+This uses two cue channels and two leaky integrate-and-fire output neurons. Initially a train of A input spikes cannot make the A output neuron spike. During training, A cue activity is followed by an externally imposed A teaching spike, 2 ms later. A causal spike-timing rule strengthens the relevant excitatory weight. At test, teaching and plasticity are disabled: only the cue can activate an output. Ten jittered trials compare baseline, trained, and identical no-learning control. Pattern B is an untrained comparison.
 
-## Scientific limitations
+**Important limits:** This is a *supervised, highly simplified* learning circuit **independent of the running 256-neuron Brain**. It demonstrates an elementary synaptic association and neuron-mediated output under controlled conditions. It does **not** show the existing Pantheon brain has functional memory, or show persistent long-term retention, language, or consciousness. The next stage is to incorporate the learned cue-response pathway inside Pantheon's live network and validate it across delays and random seeds. The numeric output here is reproducible by design; it is not an independent biological discovery.
 
-- Node placement is an illustrative projection. Synaptic lines show actual directed connections, but line glows indicate recent presynaptic spikes, not measured pulse transit.
-- Spontaneous firing partly results from artificial stochastic drive.
-- STDP modifies excitatory synapses; it is not evidence of concepts, consciousness, or useful learning.
-- To establish learning, make reproducible before/after response measurements and a plasticity-disabled control experiment. This UI is not yet a formal learning benchmark.
-- The SpikeMonitor keeps spikes for the duration of a session, so long runs increase memory use.
-- Saving persists simulation state, not wall-clock activity while the app is shut down.
-# pantheon
+## Git
+
+```bash
+git add .
+git commit -m "Add associative memory microcircuit experiment"
+git push
+```

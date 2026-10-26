@@ -1,10 +1,12 @@
 """Pantheon v0.4 observatory, controls, and inspection panel."""
 from pathlib import Path
+import json
+import sys
 import numpy as np
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, QProcess
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QLabel, QComboBox, QPushButton, QFileDialog,
-                               QMessageBox, QCheckBox, QFrame)
+                               QMessageBox, QCheckBox, QFrame, QDialog, QTextEdit)
 from .canvas import NeuralCanvas
 
 
@@ -12,7 +14,7 @@ class PantheonWindow(QMainWindow):
     def __init__(self, brain):
         super().__init__()
         self.brain = brain
-        self.setWindowTitle('PANTHEON v0.4 — Neural Observatory')
+        self.setWindowTitle('PANTHEON v0.5 — Neural Observatory')
         self.resize(1240, 830)
         self.setStyleSheet('''
             QMainWindow, QWidget {background:#080f1f;color:#d7e8f5;}
@@ -83,6 +85,10 @@ class PantheonWindow(QMainWindow):
         load = QPushButton('Load brain')
         load.clicked.connect(self.load_brain)
         controls.addWidget(load)
+        experiment = QPushButton('Experiment 002: Test Memory')
+        experiment.clicked.connect(self.run_memory_experiment)
+        controls.addWidget(experiment)
+        self.experiment_button = experiment
         layout.addLayout(controls)
 
         self.detail = QLabel('Click a neuron to inspect it. Pulse A/B stimulate distinct groups; Train A repeats A 20 times.')
@@ -176,3 +182,73 @@ class PantheonWindow(QMainWindow):
             self.detail.setText(f'Restored Pantheon from {filename}')
         finally:
             if running: self.timer.start(50)
+
+    def run_memory_experiment(self):
+        # A subprocess ensures experimental resets never change the live brain.
+        self.experiment_button.setEnabled(False)
+        self.detail.setText('Running isolated baseline, training, and no-learning control...')
+        self.experiment_proc = QProcess(self)
+        self.experiment_proc.setWorkingDirectory(str(Path(__file__).resolve().parents[1]))
+        self.experiment_proc.setProgram(sys.executable)
+        self.experiment_proc.setArguments(['-m', 'brain.experiment'])
+        self.experiment_proc.finished.connect(self.experiment_finished)
+        self.experiment_proc.errorOccurred.connect(self.experiment_failed)
+        self.experiment_proc.start()
+
+    def experiment_failed(self, error):
+        if not hasattr(self, 'experiment_proc'):
+            return
+        self.experiment_button.setEnabled(True)
+        self.detail.setText('Could not launch experiment: ' + self.experiment_proc.errorString())
+
+    def experiment_finished(self, exit_code, exit_status):
+        self.experiment_button.setEnabled(True)
+        out = bytes(self.experiment_proc.readAllStandardOutput()).decode('utf-8', 'replace')
+        err = bytes(self.experiment_proc.readAllStandardError()).decode('utf-8', 'replace')
+        if exit_code != 0:
+            QMessageBox.critical(self, 'Experiment failed', (err or out)[-3000:])
+            self.detail.setText('Experiment failed; live neural simulation is unaffected.')
+            return
+        try:
+            data = json.loads(out[out.index('{'):])
+        except (ValueError, KeyError) as exc:
+            QMessageBox.warning(self, 'Unexpected results', out[-3000:])
+            return
+        results = data['response_change']
+        learning = data['plasticity_on']
+        control = data['plasticity_off_control']
+        report = f"""PANTHEON EXPERIMENT 002 — ISOLATED MEMORY ASSAY
+
+Protocol: {data['training']}
+Probe: {data['probe']}
+
+                         Baseline     Trained     Control (no plasticity)
+Pattern A spikes:        {data['baseline']['A']['spikes_undriven']:>5}       {learning['A']['spikes_undriven']:>5}       {control['A']['spikes_undriven']:>5}
+Pattern B spikes:        {data['baseline']['B']['spikes_undriven']:>5}       {learning['B']['spikes_undriven']:>5}       {control['B']['spikes_undriven']:>5}
+
+Mean |weight change|, trained: {learning['weights']['mean_abs_weight_change_mV']:.8f} mV
+Mean |weight change|, control: {control['weights']['mean_abs_weight_change_mV']:.8f} mV
+
+Trained minus control spike count, A: {results['trained_A_minus_control_A_spikes']:+d}
+Trained minus control spike count, B: {results['trained_B_minus_control_B_spikes']:+d}
+Neuron-by-neuron spike difference (L1), A: {results['trained_A_minus_control_A_L1']}
+Neuron-by-neuron spike difference (L1), B: {results['trained_B_minus_control_B_L1']}
+
+{data['interpretation']}
+
+This experiment runs in a separate process; your live brain was not altered.
+"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Pantheon — Experiment 002 results')
+        dialog.resize(770, 510)
+        layout = QVBoxLayout(dialog)
+        view = QTextEdit()
+        view.setReadOnly(True)
+        view.setPlainText(report)
+        view.setStyleSheet('font-family:monospace; font-size:12px;')
+        layout.addWidget(view)
+        close = QPushButton('Close')
+        close.clicked.connect(dialog.accept)
+        layout.addWidget(close)
+        dialog.exec()
+        self.detail.setText('Experiment 002 complete. Live brain remained unchanged by the test.')
